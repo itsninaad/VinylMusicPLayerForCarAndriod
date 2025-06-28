@@ -1,0 +1,154 @@
+package com.yourname.vinylmusicplayer
+
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
+import android.media.MediaPlayer
+import android.media.session.MediaController
+import android.media.session.MediaSession
+import android.os.Bundle
+import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
+import com.yourname.vinylmusicplayer.ui.theme.VinylMusicPlayerTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+class MainActivity : ComponentActivity() {
+    private lateinit var enableBluetoothLauncher: ActivityResultLauncher<Intent>
+    private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
+    private var scratchLeftSound: MediaPlayer? = null
+    private var scratchRightSound: MediaPlayer? = null
+    private lateinit var mediaSession: MediaSession
+    private lateinit var mediaController: MediaController
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        enableBluetoothLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                Log.d("Bluetooth", "Bluetooth enabled successfully")
+            } else {
+                Log.d("Bluetooth", "Bluetooth enabling failed or was canceled")
+            }
+        }
+
+        enableBluetooth()
+        scratchLeftSound = MediaPlayer.create(this, R.raw.scratch_left)
+        scratchRightSound = MediaPlayer.create(this, R.raw.scratch_right)
+        mediaSession = MediaSession(this, "VinylSession")
+        mediaController = MediaController(this, mediaSession.sessionToken)
+
+        setContent {
+            VinylMusicPlayerTheme {
+                VinylScreen(mediaController, scratchLeftSound, scratchRightSound)
+            }
+        }
+    }
+
+    private fun enableBluetooth() {
+        if (bluetoothAdapter == null) {
+            Log.d("Bluetooth", "Bluetooth is not supported on this device")
+            return
+        }
+        if (!bluetoothAdapter.isEnabled) {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            enableBluetoothLauncher.launch(enableBtIntent)
+        }
+    }
+}
+
+@Composable
+fun VinylScreen(mediaController: MediaController, scratchLeft: MediaPlayer?, scratchRight: MediaPlayer?) {
+    var rotation by remember { mutableStateOf(0f) }
+    var isPlaying by remember { mutableStateOf(true) }
+    var isScratching by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val animatedRotation by animateFloatAsState(
+        targetValue = rotation,
+        animationSpec = tween(durationMillis = 500, easing = LinearEasing),
+        label = "rotation"
+    )
+
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            delay(16L)
+            rotation += 0.5f
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .pointerInput(Unit) {
+                detectTransformGestures { _, _, _, rotationChange ->
+                    isScratching = true
+                    isPlaying = false
+
+                    rotation += rotationChange * 10f // Rotate based on input
+                    playScratchSound(rotationChange < 0, scratchLeft, scratchRight)
+
+                    scope.launch {
+                        seekMusic(mediaController, rotationChange)
+                        delay(1000L)
+                        isScratching = false
+                        isPlaying = true
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.vinyl_disk),
+            contentDescription = "Vinyl Disk",
+            modifier = Modifier
+                .size(400.dp) // Increased vinyl size
+                .graphicsLayer {
+                    rotationZ = animatedRotation
+                }
+        )
+    }
+}
+
+suspend fun seekMusic(mediaController: MediaController, rotationChange: Float) {
+    val seekOffset = (rotationChange * 500).toLong() // Adjust seek speed
+    val currentPosition = mediaController.playbackState?.position ?: 0
+    val newPosition = (currentPosition + seekOffset).coerceAtLeast(0L)
+
+    mediaController.transportControls.seekTo(newPosition)
+    delay(100) // Smooth delay for seeking
+}
+
+fun playScratchSound(isLeft: Boolean, scratchLeft: MediaPlayer?, scratchRight: MediaPlayer?) {
+    if (isLeft) {
+        scratchLeft?.let {
+            if (!it.isPlaying) {
+                it.seekTo(0)
+                it.start()
+            }
+        }
+    } else {
+        scratchRight?.let {
+            if (!it.isPlaying) {
+                it.seekTo(0)
+                it.start()
+            }
+        }
+    }
+}
